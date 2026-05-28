@@ -1,0 +1,35 @@
+# Sample correlation rules (informational; the live engine is in app/correlate.py).
+# Format inspired by Sigma but simplified.
+
+rules:
+  - id: ssh_brute_force_burst
+    severity: high
+    description: 8+ failed SSH logins from same IP within 15min
+    window_minutes: 15
+    match:
+      category: brute_force
+    threshold: 8
+
+  - id: recon_then_exploit
+    severity: critical
+    description: Recon followed by SQLi from same IP within 15min
+    window_minutes: 15
+    sequence:
+      - category: recon
+      - category: sqli
+
+  - id: scan_then_rce
+    severity: critical
+    description: Scan followed by RCE attempt from same IP
+    window_minutes: 15
+    sequence:
+      - category: scan
+      - category: rce
+
+  - id: repeated_critical
+    severity: critical
+    description: 3+ critical events from same IP in 15min
+    window_minutes: 15
+    match:
+      severity: critical
+    threshold: 3

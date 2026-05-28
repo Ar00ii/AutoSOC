@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: autosoc-backend
+    environment:
+      AUTH_REQUIRED: "true"
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET via .env or shell}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@autosoc.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ABUSEIPDB_API_KEY: ${ABUSEIPDB_API_KEY:-}
+      NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
+      APPLY_FIREWALL: ${APPLY_FIREWALL:-false}
+      ACCESS_TTL_MIN: ${ACCESS_TTL_MIN:-15}
+      REFRESH_TTL_HOURS: ${REFRESH_TTL_HOURS:-336}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-viewer}
+      DB_URL: sqlite:////data/sentinel.db
+    volumes:
+      - autosoc-data:/data
+    restart: unless-stopped
+    networks: [autosoc]
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: autosoc-frontend
+    depends_on: [backend]
+    restart: unless-stopped
+    networks: [autosoc]
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: autosoc-nginx
+    depends_on: [backend, frontend]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks: [autosoc]
+
+volumes:
+  autosoc-data:
+
+networks:
+  autosoc:
+    driver: bridge

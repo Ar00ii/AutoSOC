@@ -1,0 +1,109 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  background: #ffffff;
+  color: #000000;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: #000;
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid #000;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+button,
+[role="button"],
+a {
+  cursor: pointer;
+}
+
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.label-cap {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  color: #000;
+}
+
+.label-cap-muted {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  color: #6b6b6b;
+}
+
+.hair {
+  border-color: #e5e5e5;
+}
+
+.scrollbar-mono::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-mono::-webkit-scrollbar-thumb {
+  background: #000;
+}
+.scrollbar-mono::-webkit-scrollbar-track {
+  background: #fff;
+}
+
+.sev-low {
+  border: 1px solid #000;
+  background: #fff;
+  color: #000;
+}
+.sev-med {
+  border: 1px solid #000;
+  background: #fff;
+  color: #000;
+  box-shadow: inset 4px 0 0 0 #000;
+  padding-left: 8px;
+}
+.sev-high {
+  background: #000;
+  color: #fff;
+  border: 1px solid #000;
+}
+.sev-crit {
+  background: #000;
+  color: #fff;
+  border: 1px solid #000;
+  outline: 1px solid #000;
+  outline-offset: 2px;
+}
