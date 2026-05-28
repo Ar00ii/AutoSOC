@@ -56,6 +56,42 @@ def password_complaint() -> str:
     )
 
 
+def is_valid_ip(value: str) -> bool:
+    """True only for a canonical IPv4/IPv6 address or CIDR network.
+
+    Used to gate any value that reaches the OS firewall or an outbound lookup,
+    so a malformed/attacker-controlled string can never be passed to iptables /
+    netsh as an argument."""
+    if not value or not isinstance(value, str):
+        return False
+    value = value.strip()
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        pass
+    try:
+        ipaddress.ip_network(value, strict=False)
+        return True
+    except ValueError:
+        return False
+
+
+def client_ip(request) -> str:
+    """Best-effort real client IP for rate-limit / lockout / audit keys.
+
+    Behind our nginx reverse proxy the socket peer is the proxy, so prefer the
+    proxy-set X-Real-IP / first X-Forwarded-For hop. Only trusted when the app
+    runs behind a proxy that overwrites these headers (the documented deploy)."""
+    xri = (request.headers.get("x-real-ip") or "").strip()
+    if xri and is_valid_ip(xri):
+        return xri
+    xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if xff and is_valid_ip(xff):
+        return xff
+    return request.client.host if request.client else "unknown"
+
+
 def is_url_safe_outbound(url: str) -> tuple[bool, str]:
     if not url:
         return False, "empty url"
@@ -79,7 +115,10 @@ def is_url_safe_outbound(url: str) -> tuple[bool, str]:
             obj = ipaddress.ip_address(ip)
         except Exception:
             return False, f"bad ip {ip}"
-        if obj.is_private or obj.is_loopback or obj.is_link_local or obj.is_multicast or obj.is_reserved or obj.is_unspecified:
+        if (
+            obj.is_private or obj.is_loopback or obj.is_link_local or obj.is_multicast
+            or obj.is_reserved or obj.is_unspecified or not obj.is_global
+        ):
             return False, f"resolves to disallowed address {ip}"
     return True, ""
 
@@ -132,6 +171,8 @@ class RateLimiter:
 login_rate = RateLimiter(max_hits=10, window_seconds=60.0)
 ingest_rate = RateLimiter(max_hits=600, window_seconds=60.0)
 agent_run_rate = RateLimiter(max_hits=30, window_seconds=60.0)
+# Throttles online brute force of the 6-digit TOTP space on MFA verification.
+mfa_rate = RateLimiter(max_hits=5, window_seconds=300.0)
 
 
 class AccountLockout:

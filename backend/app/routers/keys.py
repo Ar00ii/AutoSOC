@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..auth import new_api_key, require
+from ..auth import new_api_key, require, role_within_caller
 from ..audit import log as audit_log
 from ..db import get_db
 from ..schemas import ApiKeyCreated, ApiKeyIn, ApiKeyOut
@@ -19,6 +19,8 @@ def list_keys(db: Session = Depends(get_db), principal: dict = Depends(require("
 def create_key(payload: ApiKeyIn, db: Session = Depends(get_db), principal: dict = Depends(require("keys", "create"))):
     if not db.query(models.Role).get(payload.role_id):
         raise HTTPException(400, "Role does not exist")
+    if not role_within_caller(db, principal, payload.role_id):
+        raise HTTPException(403, "Cannot mint a key with more privileges than your own")
     raw, prefix, hashed = new_api_key()
     k = models.ApiKey(
         name=payload.name,

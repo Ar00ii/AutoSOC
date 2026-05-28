@@ -155,6 +155,7 @@ def _run_webhook(db: Session, agent: models.Agent, run: models.AgentRun, user_in
             agent.webhook_url,
             json={"agent": agent.name, "input": user_input},
             timeout=max(5, agent.timeout_seconds),
+            follow_redirects=False,
         )
         run.output = r.text[:4000]
         run.steps = json.dumps([{"step": 1, "http_status": r.status_code}])

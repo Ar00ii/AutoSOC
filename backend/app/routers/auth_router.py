@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..audit import log as audit_log
 from ..auth import (
+    consume_jti,
     create_access_token,
     create_mfa_challenge,
     create_refresh_token,
@@ -17,6 +18,7 @@ from ..auth import (
 from ..config import settings
 from ..db import get_db
 from ..mfa import load_secret, verify_code
+from ..notify import email_configured, send_email
 from ..schemas import (
     ForgotPasswordIn,
     LoginIn,
@@ -29,10 +31,13 @@ from ..schemas import (
 )
 import jwt as _pyjwt
 import logging
+import secrets as _secrets
 from datetime import timedelta
 from ..security import (
     account_lockout,
+    client_ip,
     login_rate,
+    mfa_rate,
     password_complaint,
     password_strong,
     sse_tickets,
@@ -49,7 +54,7 @@ def _build_token_response(user: models.User, db: Session, request: Request) -> T
     user.last_login = datetime.utcnow()
     db.commit()
     access = create_access_token(user.id, user.email, role_name)
-    ip = request.client.host if request.client else ""
+    ip = client_ip(request)
     ua = request.headers.get("user-agent", "")
     refresh, _jti = create_refresh_token(user.id, db, ip=ip, ua=ua)
     return TokenOut(
@@ -69,7 +74,7 @@ def _build_token_response(user: models.User, db: Session, request: Request) -> T
 
 @router.post("/login", response_model=TokenOut)
 def login(payload: LoginIn, request: Request, db: Session = Depends(get_db)):
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     allowed, _ = login_rate.check(ip)
     if not allowed:
         raise HTTPException(429, "Too many login attempts. Try again in a minute.")
@@ -101,16 +106,24 @@ def login(payload: LoginIn, request: Request, db: Session = Depends(get_db)):
 
 @router.post("/login/mfa", response_model=TokenOut)
 def login_mfa(payload: MfaVerifyIn, request: Request, db: Session = Depends(get_db)):
+    ip = client_ip(request)
     claims = decode_token(payload.challenge, expected_typ="mfa_challenge")
-    user = db.query(models.User).get(int(claims["sub"]))
+    sub = claims.get("sub", "")
+    allowed, _ = mfa_rate.check(f"mfa:{sub}")
+    if not allowed:
+        raise HTTPException(429, "Too many MFA attempts. Try again shortly.")
+    user = db.query(models.User).get(int(sub))
     if not user or user.active != 1 or user.mfa_enabled != 1:
         raise HTTPException(401, "Challenge no longer valid")
     secret = load_secret(user.totp_secret_enc)
     if not secret or not verify_code(secret, payload.code):
-        ip = request.client.host if request.client else "unknown"
         audit_log(db, user.email, "mfa_failed", ip)
         raise HTTPException(401, "Invalid MFA code")
-    audit_log(db, user.email, "mfa_success", request.client.host if request.client else "")
+    # One-time: burn the challenge so a captured challenge+code cannot be replayed.
+    if not consume_jti(db, claims.get("jti"), "mfa_challenge"):
+        audit_log(db, user.email, "mfa_challenge_replayed", ip)
+        raise HTTPException(401, "Challenge already used")
+    audit_log(db, user.email, "mfa_success", ip)
     return _build_token_response(user, db, request)
 
 
@@ -119,7 +132,20 @@ def refresh(payload: RefreshIn, request: Request, db: Session = Depends(get_db))
     claims = decode_token(payload.refresh_token, expected_typ="refresh")
     jti = claims.get("jti")
     rt = db.query(models.RefreshToken).filter(models.RefreshToken.jti == jti).first()
-    if not rt or rt.revoked == 1 or rt.expires_at <= datetime.utcnow():
+    if not rt:
+        raise HTTPException(401, "Refresh token revoked or expired")
+    # Reuse detection: a token we already rotated away (revoked) being presented
+    # again means it was likely stolen. Burn the whole family and refuse.
+    if rt.revoked == 1:
+        db.query(models.RefreshToken).filter(
+            models.RefreshToken.user_id == rt.user_id,
+            models.RefreshToken.revoked == 0,
+        ).update({"revoked": 1})
+        db.commit()
+        user = db.query(models.User).get(rt.user_id)
+        audit_log(db, user.email if user else str(rt.user_id), "refresh_reuse_detected", client_ip(request))
+        raise HTTPException(401, "Refresh token revoked or expired")
+    if rt.expires_at <= datetime.utcnow():
         raise HTTPException(401, "Refresh token revoked or expired")
     user = db.query(models.User).get(rt.user_id)
     if not user or user.active != 1:
@@ -193,10 +219,13 @@ _reset_log = logging.getLogger("autosoc.password_reset")
 
 
 def _create_reset_token(user_id: int) -> str:
-    now = datetime.utcnow()
+    # Use timezone-aware UTC: naive utcnow().timestamp() is read as *local* time,
+    # which corrupts exp (instant expiry in +UTC zones, over-long in -UTC zones).
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
         "typ": "password_reset",
+        "jti": _secrets.token_urlsafe(18),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=30)).timestamp()),
     }
@@ -205,17 +234,28 @@ def _create_reset_token(user_id: int) -> str:
 
 @router.post("/forgot")
 def forgot(payload: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)):
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     allowed, _ = login_rate.check(f"forgot:{ip}")
     if not allowed:
         raise HTTPException(429, "Too many requests")
     user = db.query(models.User).filter(models.User.email == payload.email).first()
     if user and user.active == 1:
         token = _create_reset_token(user.id)
-        link = f"/reset?token={token}"
-        _reset_log.warning(
-            "PASSWORD RESET requested for %s — link valid 30min: %s", user.email, link
-        )
+        base = (settings.app_base_url or "").rstrip("/")
+        link = f"{base}/reset?token={token}"
+        if email_configured():
+            send_email(
+                "AutoSoc password reset",
+                f"A password reset was requested for your account.\n\n"
+                f"Use this link within 30 minutes to set a new password:\n{link}\n\n"
+                f"If you did not request this, ignore this email.",
+                to=[user.email],
+            )
+        else:
+            # Dev fallback only: no SMTP configured, surface the link in logs.
+            _reset_log.warning(
+                "PASSWORD RESET (dev, no SMTP) for %s — link valid 30min: %s", user.email, link
+            )
         audit_log(db, user.email, "password_reset_requested", ip)
     return {"ok": True, "message": "If the email exists, a reset link has been sent."}
 
@@ -233,6 +273,9 @@ def reset(payload: ResetPasswordIn, db: Session = Depends(get_db)):
         raise HTTPException(401, "User unavailable")
     if not password_strong(payload.new_password):
         raise HTTPException(400, password_complaint())
+    # One-time: burn the reset token jti so a captured link cannot be reused.
+    if not consume_jti(db, claims.get("jti"), "password_reset"):
+        raise HTTPException(401, "Reset token already used")
     user.password_hash = hash_password(payload.new_password)
     db.query(models.RefreshToken).filter(
         models.RefreshToken.user_id == user.id,

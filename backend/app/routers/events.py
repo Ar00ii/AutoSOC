@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..ai import score_line
-from ..auth import require
+from ..auth import has_ai_access, require
 from ..config import settings
 from ..correlate import push as correlate_push
 from ..db import get_db
@@ -14,7 +14,7 @@ from ..detection.rules import quick_classify
 from ..geo import lookup_ip
 from ..intel import abuseipdb_lookup
 from ..mitre import map_category
-from ..notify import notify
+from ..notify import alert_email, notify
 from ..schemas import EventOut
 from ..security import ingest_rate
 from ..stream import publish
@@ -106,7 +106,9 @@ def ingest(
     if len(raw) > 8000:
         raise HTTPException(400, "raw too large (max 8000 chars)")
     geo = lookup_ip(src_ip)
-    if use_ai:
+    # AI scoring is a paid feature: degrade to rule-based classification when
+    # the caller has no active subscription instead of erroring out.
+    if use_ai and has_ai_access(db, principal):
         scored = score_line(source, raw)
     else:
         sev, cat = quick_classify(source, raw)
@@ -151,6 +153,71 @@ def ingest(
     db.commit()
     db.refresh(e)
 
+    # ── Autonomous pipeline ──────────────────────────────────
+    # 1. Threat-intel match: if any active IoC matches, escalate severity
+    #    and mark known_bad. Mutates the row in place.
+    try:
+        from .. import ti as ti_mod
+        ti_hits = ti_mod.apply_match_to_event(db, e)
+        if ti_hits:
+            severity = e.severity  # may have been bumped
+            from ..audit import log as _audit
+            _audit(
+                db, "system", "ti.match", str(e.id),
+                f"hits={len(ti_hits)} top={ti_hits[0]['threat_type']}/{ti_hits[0]['confidence']}",
+            )
+    except Exception as _e:  # noqa: BLE001
+        ti_hits = []
+
+    # 2. Auto-open a case when severity has reached high/critical.
+    #    Idempotent: same cluster_key reuses an existing open case.
+    if severity in ("high", "critical"):
+        try:
+            from .. import cases as cases_mod
+            cases_mod.ensure_case_for_correlation(
+                db,
+                cluster_key=cluster_key,
+                title=(
+                    correlated["summary"] if correlated else
+                    f"{scored['category']} from {src_ip}"
+                )[:200],
+                severity=severity,
+                category=scored["category"],
+                event_ids=[e.id],
+                summary=summary or "",
+            )
+        except Exception:
+            pass
+
+    # 3. Fire matching playbooks in background so the HTTP response stays fast.
+    try:
+        from .. import playbooks as pb_mod
+        matching = pb_mod.matching_playbooks(db, e)
+        if matching:
+            import threading
+
+            def _run_playbooks(event_id: int, pb_ids: list[int]) -> None:
+                from ..db import SessionLocal
+                d = SessionLocal()
+                try:
+                    ev = d.query(models.Event).get(event_id)
+                    if not ev:
+                        return
+                    for pb_id in pb_ids:
+                        pb = d.query(models.Playbook).get(pb_id)
+                        if pb and pb.enabled == 1:
+                            pb_mod.run(d, pb, event=ev, triggered_by="ingest:auto")
+                finally:
+                    d.close()
+
+            threading.Thread(
+                target=_run_playbooks,
+                args=(e.id, [p.id for p in matching]),
+                daemon=True,
+            ).start()
+    except Exception:
+        pass
+
     publish(
         "event",
         {
@@ -168,6 +235,20 @@ def ingest(
             "abuse_score": e.abuse_score,
         },
     )
+
+    # Automatic email alert to IT/security recipients (threshold-gated,
+    # threaded so SMTP latency never blocks the ingest response).
+    if severity in ("high", "critical") or known_bad:
+        import threading as _th
+
+        _title = f"{severity.upper()} {scored['category']} from {src_ip} ({geo.get('country','??')})"
+        _text = (
+            f"Source IP: {src_ip}\nCountry: {geo.get('country','??')}\n"
+            f"Category: {scored['category']}\nMITRE: {mitre.get('mitre_id','')}\n"
+            f"AbuseIPDB score: {intel['abuse_score']}\nKnown bad: {bool(known_bad)}\n\n"
+            f"Log line:\n{raw[:500]}"
+        )
+        _th.Thread(target=alert_email, args=(_title, _text, severity), daemon=True).start()
 
     if severity == "critical":
         notify(

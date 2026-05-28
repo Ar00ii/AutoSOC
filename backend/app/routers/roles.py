@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..auth import require
+from ..auth import perms_within_caller, require
 from ..audit import log as audit_log
 from ..db import get_db
 from ..schemas import RoleIn
@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/roles", tags=["roles"])
 RESOURCES = [
     "events", "tickets", "blocks", "recommendations", "reports",
     "agents", "audit", "settings", "users", "roles", "teams", "keys", "intel", "ingest",
+    "ti", "cases", "playbooks", "billing",
 ]
 ACTIONS = ["view", "create", "update", "delete", "execute"]
 
@@ -41,6 +42,8 @@ def list_roles(db: Session = Depends(get_db), principal: dict = Depends(require(
 
 @router.post("")
 def create_role(payload: RoleIn, db: Session = Depends(get_db), principal: dict = Depends(require("roles", "create"))):
+    if not perms_within_caller(principal, payload.permissions):
+        raise HTTPException(403, "Cannot grant permissions you do not hold")
     if db.query(models.Role).filter(models.Role.name == payload.name).first():
         raise HTTPException(400, "Role name already exists")
     r = models.Role(
@@ -60,6 +63,12 @@ def update_role(role_id: int, payload: RoleIn, db: Session = Depends(get_db), pr
     r = db.query(models.Role).get(role_id)
     if not r:
         raise HTTPException(404)
+    if not perms_within_caller(principal, payload.permissions):
+        raise HTTPException(403, "Cannot grant permissions you do not hold")
+    # Block a non-admin from escalating an existing role beyond their own grants.
+    existing_perms = json.loads(r.permissions or "{}")
+    if not perms_within_caller(principal, existing_perms):
+        raise HTTPException(403, "Cannot modify a role with permissions you do not hold")
     if r.is_builtin and payload.name != r.name:
         raise HTTPException(400, "Cannot rename built-in role")
     r.description = payload.description

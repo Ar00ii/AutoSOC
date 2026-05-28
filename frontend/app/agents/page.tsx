@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import Topbar from "@/components/Topbar";
+import AiLockBanner from "@/components/AiLockBanner";
 import { delJSON, fetcher, patchJSON, postJSON } from "@/lib/auth";
 
 interface AgentRow {
@@ -87,6 +88,7 @@ export default function AgentsPage() {
     <div>
       <Topbar title="AI Agents" />
       <div className="p-6 space-y-6">
+        <AiLockBanner feature="AI agents" />
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted max-w-3xl">
             Agents are reusable AI workers. Each agent has a system prompt, a model, a set of allowed tools (from the AutoSoc toolbox), and a trigger.

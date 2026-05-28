@@ -193,3 +193,183 @@ class AgentRun(Base):
     error = Column(Text, default="")
     tokens_in = Column(Integer, default=0)
     tokens_out = Column(Integer, default=0)
+
+
+# ─────────────────────────────────────────────────────────────
+#  Threat Intelligence
+# ─────────────────────────────────────────────────────────────
+
+class TIFeed(Base):
+    """A subscribed threat-intelligence feed (URLhaus, ThreatFox, OTX, MISP)."""
+    __tablename__ = "ti_feeds"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, index=True)
+    kind = Column(String, default="generic")  # urlhaus / threatfox / otx / misp / generic
+    url = Column(String, default="")
+    api_key_env = Column(String, default="")
+    enabled = Column(Integer, default=1)
+    refresh_minutes = Column(Integer, default=60)
+    last_pull = Column(DateTime, nullable=True)
+    last_count = Column(Integer, default=0)
+    last_error = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class IoC(Base):
+    """A single Indicator of Compromise — IP / domain / URL / hash / email."""
+    __tablename__ = "iocs"
+
+    id = Column(Integer, primary_key=True)
+    feed_id = Column(Integer, ForeignKey("ti_feeds.id"), index=True, nullable=True)
+    indicator = Column(String, index=True)
+    kind = Column(String, index=True)  # ip / domain / url / sha256 / md5 / email
+    threat_type = Column(String, default="")  # malware / phishing / c2 / bruteforce / scanner / tor
+    confidence = Column(Integer, default=50)  # 0-100
+    tags = Column(Text, default="[]")  # JSON list
+    first_seen = Column(DateTime, default=datetime.utcnow, index=True)
+    last_seen = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True, index=True)
+    source_ref = Column(String, default="")  # original URL / MISP event id / etc
+    active = Column(Integer, default=1, index=True)
+
+    feed = relationship("TIFeed")
+
+
+# ─────────────────────────────────────────────────────────────
+#  Cases (Incidents) — group events / tickets / IPs / actor
+# ─────────────────────────────────────────────────────────────
+
+class Case(Base):
+    __tablename__ = "cases"
+
+    id = Column(Integer, primary_key=True)
+    case_number = Column(String, unique=True, index=True)  # e.g. "CASE-2026-0001"
+    title = Column(String)
+    severity = Column(String, default="medium", index=True)
+    status = Column(String, default="open", index=True)  # open / investigating / contained / closed
+    category = Column(String, default="unknown")  # bruteforce / sqli / exfil / malware / phishing
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    closed_at = Column(DateTime, nullable=True)
+    assignee = Column(String, default="")
+    summary = Column(Text, default="")  # short human/AI summary
+    kill_chain = Column(Text, default="[]")  # JSON list of MITRE tactics seen
+    sla_due_at = Column(DateTime, nullable=True, index=True)
+
+
+class CaseEvent(Base):
+    """Many-to-many: which events are in which case."""
+    __tablename__ = "case_events"
+
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), index=True)
+    event_id = Column(Integer, ForeignKey("events.id"), index=True)
+    added_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CaseTimeline(Base):
+    """Ordered timeline of activity inside a case (events, notes, actions)."""
+    __tablename__ = "case_timeline"
+
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    kind = Column(String, default="note")  # event / note / action / agent_step / status_change
+    actor = Column(String, default="")
+    body = Column(Text, default="")
+    ref_id = Column(Integer, nullable=True)  # FK to event/ticket/run depending on kind
+    ref_kind = Column(String, default="")
+
+
+# ─────────────────────────────────────────────────────────────
+#  Playbooks — YAML-defined incident response flows
+# ─────────────────────────────────────────────────────────────
+
+class Playbook(Base):
+    __tablename__ = "playbooks"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, index=True)
+    description = Column(String, default="")
+    trigger_kind = Column(String, default="manual")  # manual / on_event / on_case / scheduled
+    trigger_filter = Column(Text, default="{}")  # JSON: {category:["bruteforce"], severity:["critical"]}
+    yaml_body = Column(Text, default="")  # the playbook definition
+    enabled = Column(Integer, default=1)
+    require_approval = Column(Integer, default=1)  # human-in-the-loop for destructive steps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String, default="system")
+
+
+class DashboardLayout(Base):
+    """A user's saved dashboard layout. Stores widget positions + config as JSON."""
+    __tablename__ = "dashboard_layouts"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    name = Column(String, index=True)
+    is_default = Column(Integer, default=0)
+    # JSON list: [{i: "uid", x, y, w, h, type: "kpi", config: {...}}]
+    widgets = Column(Text, default="[]")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Subscription(Base):
+    """Per-user AI subscription. Active status unlocks AI features
+    (agents, AI reports, AI scoring). Driven by Stripe webhooks, or
+    granted manually by an admin for comp / trial accounts."""
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, index=True)
+    plan = Column(String, default="ai_monthly")
+    status = Column(String, default="inactive", index=True)  # active / inactive / past_due / canceled
+    source = Column(String, default="manual")  # stripe / manual
+    stripe_customer_id = Column(String, default="", index=True)
+    stripe_subscription_id = Column(String, default="", index=True)
+    current_period_end = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class UsedToken(Base):
+    """One-time-use ledger for short-lived JWTs (password reset, MFA challenge).
+    A jti is inserted on first use; a second presentation is rejected as replay."""
+    __tablename__ = "used_tokens"
+
+    id = Column(Integer, primary_key=True)
+    jti = Column(String, unique=True, index=True)
+    purpose = Column(String, default="", index=True)
+    used_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProcessedStripeEvent(Base):
+    """Idempotency ledger for Stripe webhook events, to reject replays."""
+    __tablename__ = "processed_stripe_events"
+
+    id = Column(Integer, primary_key=True)
+    event_id = Column(String, unique=True, index=True)
+    event_type = Column(String, default="")
+    processed_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PlaybookRun(Base):
+    __tablename__ = "playbook_runs"
+
+    id = Column(Integer, primary_key=True)
+    playbook_id = Column(Integer, ForeignKey("playbooks.id"), index=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), index=True, nullable=True)
+    event_id = Column(Integer, ForeignKey("events.id"), index=True, nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow, index=True)
+    finished_at = Column(DateTime, nullable=True)
+    status = Column(String, default="running", index=True)  # running / completed / waiting_approval / failed / aborted
+    triggered_by = Column(String, default="system")
+    steps = Column(Text, default="[]")  # JSON list of per-step result
+    output = Column(Text, default="")
+    error = Column(Text, default="")
+    pending_approval_step = Column(Integer, nullable=True)  # which step index needs approval
+
+    playbook = relationship("Playbook")

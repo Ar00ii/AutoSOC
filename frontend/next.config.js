@@ -1,6 +1,10 @@
 /** @type {import('next').NextConfig} */
 const isProd = process.env.NODE_ENV === "production";
 
+// Where Next.js forwards /api/* requests. Same host by default; override with
+// BACKEND_ORIGIN when the API runs elsewhere.
+const backendOrigin = process.env.BACKEND_ORIGIN || "http://127.0.0.1:8000";
+
 // Note: Next.js dev needs `unsafe-eval` and `unsafe-inline`; only enforce a strict CSP in production builds.
 const csp = [
   "default-src 'self'",
@@ -14,7 +18,7 @@ const csp = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob:",
-  "connect-src 'self' http://127.0.0.1:8000 http://localhost:8000 ws: wss:",
+  `connect-src 'self' ${backendOrigin} ws: wss:`,
   "worker-src 'self' blob:",
 ].join("; ");
 
@@ -34,7 +38,7 @@ const nextConfig = {
   },
   async rewrites() {
     return [
-      { source: "/api/:path*", destination: "http://127.0.0.1:8000/api/:path*" },
+      { source: "/api/:path*", destination: `${backendOrigin}/api/:path*` },
     ];
   },
 };

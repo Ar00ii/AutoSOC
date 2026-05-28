@@ -1,13 +1,15 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..agent_tools import list_tools
 from ..agents import run_agent
-from ..auth import require
+from ..auth import require, require_ai
 from ..audit import log as audit_log
+from ..budget import budget_check, ip_quota_check_and_inc
+from ..config import settings
 from ..db import get_db
 from ..schemas import AgentIn, AgentRunIn
 from ..security import agent_run_rate, is_url_safe_outbound
@@ -157,10 +159,36 @@ def delete_agent(agent_id: int, db: Session = Depends(get_db), principal: dict =
 
 
 @router.post("/{agent_id}/run")
-def run(agent_id: int, payload: AgentRunIn, db: Session = Depends(get_db), principal: dict = Depends(require("agents", "execute"))):
+def run(
+    agent_id: int,
+    payload: AgentRunIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require("agents", "execute")),
+    _ai: dict = Depends(require_ai),
+):
     allowed, _ = agent_run_rate.check(f"agent:{principal.get('id', 0)}")
     if not allowed:
         raise HTTPException(429, "Agent run rate limit exceeded")
+
+    # Public-demo guards: per-IP quota + global daily budget cap.
+    # Only enforced when AUTH_REQUIRED is false (open demo). Authenticated
+    # tenants are governed by the per-principal rate limiter above.
+    if not settings.auth_required:
+        client_ip = (request.client.host if request.client else "0.0.0.0") or "0.0.0.0"
+        ip_ok, count = ip_quota_check_and_inc(client_ip)
+        if not ip_ok:
+            raise HTTPException(
+                429,
+                f"Demo limit reached: {settings.agents_rate_limit_per_ip_day} agent runs per IP per day. Self-host to remove this cap.",
+            )
+        budget_ok, spent, cap = budget_check(db)
+        if not budget_ok:
+            raise HTTPException(
+                429,
+                f"Daily AI budget exhausted (${spent:.2f} / ${cap:.2f}). Try again tomorrow or self-host with your own ANTHROPIC_API_KEY.",
+            )
+
     a = db.query(models.Agent).get(agent_id)
     if not a:
         raise HTTPException(404)

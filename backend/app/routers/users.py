@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..auth import hash_password, require
+from ..auth import hash_password, require, role_within_caller
 from ..audit import log as audit_log
 from ..db import get_db
 from ..schemas import UserIn, UserOut, UserUpdate
@@ -28,6 +28,8 @@ def create_user(payload: UserIn, db: Session = Depends(get_db), principal: dict 
         raise HTTPException(400, "Email already in use")
     if not db.query(models.Role).get(payload.role_id):
         raise HTTPException(400, "Invalid request")
+    if not role_within_caller(db, principal, payload.role_id):
+        raise HTTPException(403, "Cannot assign a role with more privileges than your own")
     u = models.User(
         email=payload.email,
         name=payload.name,
@@ -60,6 +62,11 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     if payload.role_id is not None:
         if not db.query(models.Role).get(payload.role_id):
             raise HTTPException(400, "Role does not exist")
+        if not role_within_caller(db, principal, payload.role_id):
+            raise HTTPException(403, "Cannot assign a role with more privileges than your own")
+        # A non-admin may not change their own role at all (self-escalation guard).
+        if principal.get("role") != "admin" and u.id == principal.get("id"):
+            raise HTTPException(403, "Cannot change your own role")
         u.role_id = payload.role_id
         changed.append(f"role_id={payload.role_id}")
     if payload.team_id is not None:

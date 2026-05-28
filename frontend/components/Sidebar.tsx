@@ -18,6 +18,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
     items: [
       { href: "/", label: "Dashboard", k: "1", perm: ["events", "view"] },
       { href: "/events", label: "Events", k: "2", perm: ["events", "view"] },
+      { href: "/cases", label: "Cases", k: "c", perm: ["cases", "view"] },
       { href: "/tickets", label: "Tickets", k: "3", perm: ["tickets", "view"] },
     ],
   },
@@ -31,6 +32,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
   {
     group: "Automation",
     items: [
+      { href: "/playbooks", label: "Playbooks", k: "p", perm: ["playbooks", "view"] },
       { href: "/agents", label: "AI Agents", k: "9", perm: ["agents", "view"] },
       { href: "/agents/runs", label: "Agent Runs", k: "0", perm: ["agents", "view"] },
     ],
@@ -38,6 +40,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
   {
     group: "Intel",
     items: [
+      { href: "/admin/ti", label: "Threat intel", k: "i", perm: ["ti", "view"] },
       { href: "/reports", label: "Reports", k: "6", perm: ["reports", "view"] },
       { href: "/audit", label: "Audit log", k: "7", perm: ["audit", "view"] },
     ],
@@ -58,6 +61,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
     group: "You",
     items: [
       { href: "/account", label: "Account", k: "a" },
+      { href: "/billing", label: "Billing", k: "b" },
       { href: "/account/sessions", label: "Sessions", k: "s" },
     ],
   },

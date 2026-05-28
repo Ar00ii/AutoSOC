@@ -76,10 +76,32 @@ def create_mfa_challenge(user_id: int) -> str:
     payload = {
         "sub": str(user_id),
         "typ": "mfa_challenge",
+        "jti": _secrets.token_urlsafe(18),
         "iat": int(_now().timestamp()),  # UTC-aware
         "exp": _exp(300),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def consume_jti(db: Session, jti: str | None, purpose: str) -> bool:
+    """Atomically mark a one-time token's jti as used. Returns False if the jti
+    is missing or was already consumed (replay), True on first successful use."""
+    if not jti:
+        return False
+    existing = (
+        db.query(models.UsedToken)
+        .filter(models.UsedToken.jti == jti)
+        .first()
+    )
+    if existing:
+        return False
+    db.add(models.UsedToken(jti=jti, purpose=purpose))
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        return False
+    return True
 
 
 def decode_token(token: str, expected_typ: str | None = None) -> dict:
@@ -108,6 +130,7 @@ def hash_api_key(key: str) -> str:
 ADMIN_PERMISSIONS = {r: ["view", "create", "update", "delete", "execute"] for r in [
     "events", "tickets", "blocks", "recommendations", "reports",
     "agents", "audit", "settings", "users", "roles", "teams", "keys", "intel", "ingest",
+    "ti", "cases", "playbooks", "billing",
 ]}
 
 
@@ -192,3 +215,78 @@ def has_permission(principal: dict, resource: str, action: str) -> bool:
     perms = principal.get("permissions", {})
     actions = perms.get(resource, [])
     return action in actions or "*" in actions
+
+
+def has_ai_access(db: Session, principal: dict) -> bool:
+    """True if the caller may use AI features (agents, AI reports, AI scoring).
+
+    - admin: always.
+    - anonymous demo (id 0, AUTH_REQUIRED=false) and API keys (id < 0):
+      allowed, but the public-demo budget guard caps spend separately.
+    - authenticated user: needs an active, unexpired subscription.
+    """
+    if principal.get("role") == "admin":
+        return True
+    pid = principal.get("id", 0)
+    if pid <= 0:
+        return True
+    sub = (
+        db.query(models.Subscription)
+        .filter(models.Subscription.user_id == pid)
+        .first()
+    )
+    if not sub or sub.status != "active":
+        return False
+    if sub.current_period_end and sub.current_period_end < _now_naive():
+        return False
+    return True
+
+
+def require_ai(
+    principal: dict = Depends(current_principal),
+    db: Session = Depends(get_db),
+) -> dict:
+    if not has_ai_access(db, principal):
+        raise HTTPException(
+            402,
+            "AI features require an active subscription. Upgrade at /billing.",
+        )
+    return principal
+
+
+_ALL_ACTIONS = {"view", "create", "update", "delete", "execute"}
+
+
+def perms_within_caller(principal: dict, perms: dict) -> bool:
+    """True if every (resource, action) in `perms` is already held by the caller.
+
+    Prevents privilege escalation: a non-admin may only define/grant permissions
+    that are a subset of their own. Admins may grant anything."""
+    if principal.get("role") == "admin":
+        return True
+    if not isinstance(perms, dict):
+        return False
+    for resource, actions in perms.items():
+        if not isinstance(actions, (list, tuple)):
+            return False
+        for action in actions:
+            wanted = _ALL_ACTIONS if action == "*" else {action}
+            for a in wanted:
+                if not has_permission(principal, resource, a):
+                    return False
+    return True
+
+
+def role_within_caller(db: Session, principal: dict, role_id: int) -> bool:
+    """True if the target role grants nothing the caller doesn't already have.
+    Used to stop low-privilege users assigning/minting higher-privilege roles."""
+    if principal.get("role") == "admin":
+        return True
+    role = db.query(models.Role).get(role_id)
+    if not role:
+        return False
+    try:
+        perms = json.loads(role.permissions or "{}")
+    except Exception:
+        return False
+    return perms_within_caller(principal, perms)

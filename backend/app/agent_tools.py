@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from . import models
 from .geo import lookup_ip
 from .intel import abuseipdb_lookup
-from .notify import notify as send_notify
+from .notify import alert_recipients, notify as send_notify, send_email as _send_email_smtp
+from .security import is_valid_ip
 
 
 def _query_events(db: Session, args: dict) -> dict:
@@ -70,6 +71,8 @@ def _recommend_block(db: Session, args: dict) -> dict:
     severity = args.get("severity", "medium")
     if not ip:
         return {"error": "ip required"}
+    if not is_valid_ip(ip):
+        return {"error": "invalid ip"}
     existing = db.query(models.IpBlock).filter(models.IpBlock.ip == ip).first()
     if existing:
         existing.hit_count += 1
@@ -90,6 +93,19 @@ def _notify(db: Session, args: dict) -> dict:
     severity = args.get("severity", "medium")
     ok = send_notify(title, text, severity)
     return {"sent": ok}
+
+
+def _send_email(db: Session, args: dict) -> dict:
+    subject = args.get("subject", "AutoSoc alert")
+    body = args.get("body", "")
+    # The agent may only mail the pre-configured security recipients — never an
+    # arbitrary address it (or attacker-controlled event text) chose. This stops
+    # the AI being abused as an open mail relay.
+    recipients = alert_recipients()
+    if not recipients:
+        return {"sent": False, "recipients": []}
+    sent = _send_email_smtp(subject, body, to=recipients)
+    return {"sent": sent, "recipients": recipients}
 
 
 def _query_tickets(db: Session, args: dict) -> dict:
@@ -180,6 +196,20 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
             },
             "required": ["title", "text"],
+        },
+    },
+    "send_email": {
+        "description": "Email the IT/security team an alert. Uses configured recipients if 'to' is omitted.",
+        "permission": ("agents", "execute"),
+        "handler": _send_email,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string"},
+                "body": {"type": "string"},
+                "to": {"type": "string", "description": "Optional recipient email; defaults to configured IT recipients"},
+            },
+            "required": ["subject", "body"],
         },
     },
     "query_tickets": {

@@ -7,7 +7,7 @@ import CriticalToast from "./CriticalToast";
 
 export default function Chrome({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  const standalone = ["/login", "/forgot", "/reset"].includes(path || "");
+  const standalone = ["/login", "/forgot", "/reset", "/landing"].includes(path || "");
 
   if (standalone) {
     return <main id="main" className="min-h-screen">{children}</main>;

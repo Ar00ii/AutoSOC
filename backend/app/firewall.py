@@ -2,12 +2,16 @@ import platform
 import subprocess
 
 from .config import settings
+from .security import is_valid_ip
 
 
 def apply_block(ip: str) -> dict:
     """Returns {applied: bool, mode: str, output: str}. Default safe: no-op."""
     if not settings.apply_firewall:
         return {"applied": False, "mode": "recommendation-only", "output": ""}
+    # Never hand an unvalidated string to the firewall CLI.
+    if not is_valid_ip(ip):
+        return {"applied": False, "mode": "invalid-ip", "output": ip[:80]}
     sysname = platform.system().lower()
     try:
         if "linux" in sysname:

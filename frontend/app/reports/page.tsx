@@ -3,6 +3,7 @@
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
 import Topbar from "@/components/Topbar";
+import AiLockBanner from "@/components/AiLockBanner";
 import type { Report } from "@/lib/api";
 import { fetcher, post } from "@/lib/api";
 
@@ -12,12 +13,21 @@ export default function ReportsPage() {
   const { data } = useSWR<Report[]>("/api/reports", fetcher, { refreshInterval: 30_000 });
   const [period, setPeriod] = useState("24h");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   async function generate() {
     setBusy(true);
+    setError("");
     try {
       await post(`/api/reports/generate?period=${period}`);
       mutate("/api/reports");
+    } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e);
+      setError(
+        msg.includes("subscription")
+          ? "AI reports require an active subscription. Upgrade in Billing."
+          : "Could not generate the report.",
+      );
     } finally {
       setBusy(false);
     }
@@ -27,6 +37,7 @@ export default function ReportsPage() {
     <div>
       <Topbar title="Reports / AI generated" />
       <div className="p-6 space-y-4">
+        <AiLockBanner feature="AI reports" />
         <div className="flex items-center gap-3 border border-ink p-3">
           <span className="label-cap">Period</span>
           <select
@@ -46,6 +57,9 @@ export default function ReportsPage() {
             {busy ? "Generating..." : "Generate"}
           </button>
         </div>
+        {error && (
+          <div role="alert" className="border border-ink p-3 text-sm">{error}</div>
+        )}
         <div className="space-y-4">
           {(data ?? []).map((r) => (
             <article key={r.id} className="border border-ink p-4">

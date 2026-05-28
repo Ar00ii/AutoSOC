@@ -12,6 +12,7 @@ from ..detection.rules import quick_classify
 from ..geo import lookup_ip
 from ..mitre import map_category
 from ..schemas import BulkIngestIn, IocImportIn
+from ..security import is_valid_ip
 
 router = APIRouter(prefix="/api/migrate", tags=["migrate"])
 
@@ -79,9 +80,11 @@ def ioc_import(payload: IocImportIn, db: Session = Depends(get_db), principal: d
         raise HTTPException(400, "Invalid severity")
     created = 0
     updated = 0
+    skipped = 0
     for ip in payload.items:
         ip = ip.strip()
-        if not ip:
+        if not ip or not is_valid_ip(ip):
+            skipped += 1
             continue
         existing = db.query(models.IpBlock).filter(models.IpBlock.ip == ip).first()
         if existing:
@@ -104,4 +107,4 @@ def ioc_import(payload: IocImportIn, db: Session = Depends(get_db), principal: d
         db, principal.get("email", "?"), "ioc_import", payload.reason,
         f"created={created} updated={updated}",
     )
-    return {"created": created, "updated": updated}
+    return {"created": created, "updated": updated, "skipped": skipped}
