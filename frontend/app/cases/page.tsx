@@ -4,14 +4,14 @@ import useSWR from "swr";
 import Link from "next/link";
 import Topbar from "@/components/Topbar";
 import Badge from "@/components/Badge";
-import { fetcher, post } from "@/lib/api";
+import { fetcher, post, type Severity } from "@/lib/api";
 import { useState } from "react";
 
 interface CaseRow {
   id: number;
   case_number: string;
   title: string;
-  severity: string;
+  severity: Severity;
   status: string;
   category: string;
   assignee: string;

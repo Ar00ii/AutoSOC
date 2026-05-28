@@ -102,13 +102,13 @@ export default function DashboardGrid() {
 
   async function ensureLayout(newWidgets: WidgetPlacement[]): Promise<LayoutDoc> {
     if (active) {
-      const updated = await patch(`/api/dashboard/layouts/${active.id}`, {
+      const updated = await patch<LayoutDoc>(`/api/dashboard/layouts/${active.id}`, {
         name: active.name, widgets: newWidgets, is_default: active.is_default,
       });
       mutate();
       return updated;
     }
-    const created = await post("/api/dashboard/layouts", {
+    const created = await post<LayoutDoc>("/api/dashboard/layouts", {
       name: "Default", widgets: newWidgets, is_default: true,
     });
     mutate();
@@ -148,7 +148,7 @@ export default function DashboardGrid() {
   async function newLayout() {
     const name = prompt("Name this layout (e.g. Threat hunting, Compliance):");
     if (!name) return;
-    const created = await post("/api/dashboard/layouts", {
+    const created = await post<LayoutDoc>("/api/dashboard/layouts", {
       name, widgets: DEFAULT_LAYOUT, is_default: false,
     });
     mutate();
@@ -156,7 +156,7 @@ export default function DashboardGrid() {
   }
 
   async function forkTemplate(tplId: string) {
-    const created = await post("/api/dashboard/layouts/_fork_template", { template_id: tplId });
+    const created = await post<LayoutDoc>("/api/dashboard/layouts/_fork_template", { template_id: tplId });
     mutate();
     setActiveId(created.id);
     setShowTemplates(false);
@@ -196,7 +196,7 @@ export default function DashboardGrid() {
     try {
       const text = await file.text();
       const obj = JSON.parse(text);
-      const created = await post("/api/dashboard/layouts/_import", {
+      const created = await post<LayoutDoc>("/api/dashboard/layouts/_import", {
         schema: obj.schema || "autosoc.dashboard_layout.v1",
         name: obj.name || file.name.replace(/\.json$/i, ""),
         widgets: obj.widgets || [],

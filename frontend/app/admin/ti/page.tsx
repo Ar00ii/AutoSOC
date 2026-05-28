@@ -181,8 +181,8 @@ export default function TIPage() {
 const Th: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <th className="text-left px-3 py-2 label-cap whitespace-nowrap">{children}</th>
 );
-const Td: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = "" }) => (
-  <td className={"px-3 py-2 align-middle " + className}>{children}</td>
+const Td: React.FC<{ children: React.ReactNode; className?: string; title?: string }> = ({ children, className = "", title }) => (
+  <td className={"px-3 py-2 align-middle " + className} title={title}>{children}</td>
 );
 const Stat: React.FC<{ label: string; value: number }> = ({ label, value }) => (
   <div className="bg-paper p-4">

@@ -5,13 +5,13 @@ import { useState } from "react";
 import Link from "next/link";
 import Topbar from "@/components/Topbar";
 import Badge from "@/components/Badge";
-import { fetcher, post, patch } from "@/lib/api";
+import { fetcher, post, patch, type Severity } from "@/lib/api";
 
 interface CaseDetail {
   id: number;
   case_number: string;
   title: string;
-  severity: string;
+  severity: Severity;
   status: string;
   category: string;
   assignee: string;
@@ -41,7 +41,7 @@ interface CaseEventRow {
   timestamp: string;
   src_ip: string;
   src_country: string;
-  severity: string;
+  severity: Severity;
   category: string;
   mitre_id: string;
   mitre_tactic: string;
