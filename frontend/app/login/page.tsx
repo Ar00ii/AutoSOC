@@ -9,8 +9,8 @@ interface OidcStatus { enabled: boolean; issuer?: string }
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState("admin@autosoc.local");
-  const [password, setPassword] = useState("admin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [challenge, setChallenge] = useState<string | null>(null);
@@ -162,18 +162,6 @@ export default function LoginPage() {
 
         {!challenge && (
           <a href="/forgot" className="block text-center label-cap underline">Forgot password?</a>
-        )}
-
-        {!challenge && (
-          <details className="border border-hair p-2">
-            <summary className="label-cap-muted cursor-pointer">Demo accounts</summary>
-            <ul className="mt-2 text-xs space-y-1 tabular-nums">
-              <li>admin@autosoc.local / admin</li>
-              <li>analyst@autosoc.local / analyst</li>
-              <li>l1@autosoc.local / l1</li>
-              <li>viewer@autosoc.local / viewer</li>
-            </ul>
-          </details>
         )}
       </div>
     </div>
