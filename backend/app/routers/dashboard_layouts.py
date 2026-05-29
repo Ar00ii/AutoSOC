@@ -288,6 +288,7 @@ def create_layout(
 
 
 @router.put("/{layout_id}")
+@router.patch("/{layout_id}")
 def update_layout(
     layout_id: int,
     payload: LayoutIn,
